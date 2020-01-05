@@ -98,17 +98,19 @@ const initScript = `#!/bin/busybox sh
 busybox mount -t proc proc /proc
 busybox mount -t sysfs none /sys
 
-busybox modprobe virtio_pci
-busybox modprobe virtio_console
-busybox modprobe 9pnet_virtio
-busybox modprobe 9p
+#busybox modprobe virtio_pci
+#busybox modprobe virtio_console
+#busybox modprobe 9pnet_virtio
+#busybox modprobe 9p
 
-busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 usr /usr
+#busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 usr /usr
+busybox mount none /usr -o /usr -t hostfs
 if ! busybox test -L /bin ; then
 	busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 sbin /sbin
 	busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 bin /bin
 	busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 lib /lib
 fi
+#exec busybox ash
 exec /lib/systemd/systemd
 `
 const networkd = `
@@ -122,7 +124,8 @@ LinkLocalAddressing=no
 IPv6AcceptRA=no
 `
 const commandWrapper = `#!/bin/sh
-/lib/systemd/systemd-networkd-wait-online -q
+#/lib/systemd/systemd-networkd-wait-online -q
+true
 if [ $? != 0 ]; then
   echo "WARNING: Network setup failed"
   echo "== Journal =="
@@ -131,7 +134,7 @@ if [ $? != 0 ]; then
   networkctl status
   networkctl list
   echo 1 > /run/fakemachine/result
-  exit
+  #exit
 fi
 
 echo Running '%[1]s'
@@ -286,8 +289,8 @@ func (m *Machine) generateFstab(w *writerhelper.WriterHelper) {
 
 	for _, point := range m.mounts {
 		fstab = append(fstab,
-			fmt.Sprintf("%s %s 9p trans=virtio,version=9p2000.L,cache=loose,msize=262144 0 0",
-				point.label, point.machineDirectory))
+			fmt.Sprintf("none %s hostfs %s 0 0",
+				point.machineDirectory, point.hostDirectory))
 	}
 	fstab = append(fstab, "")
 
@@ -480,19 +483,14 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 	// reserving /dev/ttyS0 for boot messages (which we ignore)
 	// and /dev/hvc0 for possible use by systemd as a getty
 	// (which we also ignore).
-	tty := "/dev/hvc0"
+	tty := "/dev/tty0"
 	if m.showBoot {
 		// If we are debugging a failing boot, mix job output into
 		// the normal console messages instead, so we can see both.
-		tty = "/dev/console"
+		tty = "/dev/tty0"
 	}
 	w.WriteFile("etc/systemd/system/fakemachine.service",
 		fmt.Sprintf(serviceTemplate, tty, strings.Join(m.Environ, " ")), 0644)
-
-	w.WriteSymlink(
-		"/lib/systemd/system/serial-getty@ttyS0.service",
-		"/dev/null",
-		0755)
 
 	w.WriteFile("/wrapper",
 		fmt.Sprintf(commandWrapper, command), 0755)
@@ -508,23 +506,27 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 	w.Close()
 	f.Close()
 
-	kernelRelease, err := m.kernelRelease()
-	if err != nil {
-		return -1, err
-	}
+	//kernelRelease, err := m.kernelRelease()
+	//if err != nil //{
+	//	return -1, err
+	//}
 	memory := fmt.Sprintf("%d", m.memory)
-	numcpus := fmt.Sprintf("%d", m.numcpus)
-	qemuargs := []string{"qemu-system-x86_64",
-		"-cpu", "host",
-		"-smp", numcpus,
-		"-m", memory,
-		"-enable-kvm",
-		"-kernel", "/boot/vmlinuz-" + kernelRelease,
-		"-initrd", InitrdPath,
-		"-display", "none",
-		"-no-reboot"}
-	kernelargs := []string{"console=ttyS0", "panic=-1",
-		"systemd.unit=fakemachine.service"}
+	//numcpus := fmt.Sprintf("%d", m.numcpus)
+	qemuargs := []string{"linux.uml",
+		//"-cpu", "host",
+		//"-smp", numcpus,
+		"mem=" + memory + "M",
+		//"-enable-kvm",
+		//"-kernel", "/boot/vmlinuz-" + kernelRelease,
+		"initrd=" + InitrdPath,
+		"systemd.debug-shell=1",
+		"panic=-1",
+		"systemd.unit=fakemachine.service",
+		"console=tty0",
+		"eth0=slirp,,slirp",
+		}
+	//kernelargs := []string{"console=ttyS0", "panic=-1",
+		//"systemd.unit=fakemachine.service"}
 
 	if m.showBoot {
 		// Create a character device representing our stdio
@@ -532,29 +534,29 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 		// port (which is the console device for the BIOS,
 		// Linux and systemd, and is also connected to the
 		// fakemachine script) to that device
-		qemuargs = append(qemuargs,
-			"-chardev", "stdio,id=for-ttyS0,signal=off",
-			"-serial", "chardev:for-ttyS0")
+		//qemuargs = append(qemuargs,
+		//	"-chardev", "stdio,id=for-ttyS0,signal=off",
+		//	"-serial", "chardev:for-ttyS0")
 	} else {
-		qemuargs = append(qemuargs,
+		//qemuargs = append(qemuargs,
 			// Create the bus for virtio consoles
-			"-device", "virtio-serial",
+		//	"-device", "virtio-serial",
 			// Create /dev/ttyS0 to be the VM console, but
 			// ignore anything written to it, so that it
 			// doesn't corrupt our terminal
-			"-chardev", "null,id=for-ttyS0",
-			"-serial", "chardev:for-ttyS0",
-			// Connect the fakemachine script to our stdio
+		//	"-chardev", "null,id=for-ttyS0",
+		//	"-serial", "chardev:for-ttyS0",
+		//	// Connect the fakemachine script to our stdio
 			// file descriptors
-			"-chardev", "stdio,id=for-hvc0,signal=off",
-			"-device", "virtconsole,chardev=for-hvc0")
+		//	"-chardev", "stdio,id=for-hvc0,signal=off",
+		//	"-device", "virtconsole,chardev=for-hvc0")
 	}
 
-	for _, point := range m.mounts {
-		qemuargs = append(qemuargs, "-virtfs",
-			fmt.Sprintf("local,mount_tag=%s,path=%s,security_model=none",
-				point.label, point.hostDirectory))
-	}
+	//for _, point := range m.mounts {
+		//qemuargs = append(qemuargs, "-virtfs",
+		//	fmt.Sprintf("local,mount_tag=%s,path=%s,security_model=none",
+		//		point.label, point.hostDirectory))
+	//}
 
 	for i, img := range m.images {
 		qemuargs = append(qemuargs, "-drive",
@@ -564,13 +566,13 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 				i, i, img.label))
 	}
 
-	qemuargs = append(qemuargs, "-append", strings.Join(kernelargs, " "))
+	//qemuargs = append(qemuargs, "-append", strings.Join(kernelargs, " "))
 
 	pa := os.ProcAttr{
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	}
 
-	if p, err := os.StartProcess("/usr/bin/qemu-system-x86_64", qemuargs, &pa); err != nil {
+	if p, err := os.StartProcess("/usr/bin/linux.uml", qemuargs, &pa); err != nil {
 		return -1, err
 	} else {
 		p.Wait()
