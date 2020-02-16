@@ -106,16 +106,19 @@ busybox mount -t sysfs none /sys
 #busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 usr /usr
 busybox mount none /usr -o /usr -t hostfs
 if ! busybox test -L /bin ; then
-	busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 sbin /sbin
-	busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 bin /bin
-	busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 lib /lib
+	busybox mount none /sbin -o /sbin -t hostfs
+	#busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 sbin /sbin
+	busybox mount none /bin -o /bin -t hostfs
+	#busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 bin /bin
+	busybox mount none /lib -o /lib -t hostfs
+	#busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 lib /lib
 fi
 #exec busybox ash
 exec /lib/systemd/systemd
 `
 const networkd = `
 [Match]
-Name=e*
+Name=vec*
 
 [Network]
 DHCP=ipv4
@@ -124,7 +127,7 @@ LinkLocalAddressing=no
 IPv6AcceptRA=no
 `
 const commandWrapper = `#!/bin/sh
-#/lib/systemd/systemd-networkd-wait-online -q
+/lib/systemd/systemd-networkd-wait-online -q
 true
 if [ $? != 0 ]; then
   echo "WARNING: Network setup failed"
@@ -237,7 +240,7 @@ func (m *Machine) CreateImageWithLabel(path string, size int64, label string) (s
 	i.Close()
 	m.images = append(m.images, image{path, label})
 
-	return fmt.Sprintf("/dev/disk/by-id/virtio-%s", label), nil
+	return fmt.Sprintf("/dev/disk/by-path/platform-uml-blkdev.%d", len(m.images)-1), nil
 }
 
 // CreateImage does the same as CreateImageWithLabel but lets the library pick
@@ -477,13 +480,18 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 		"/etc/resolv.conf",
 		0755)
 
+	w.WriteSymlink(
+		"/dev/null",
+		"/etc/systemd/system-generators/lvm2-activation-generator",
+		0755)
+
 	m.writerKernelModules(w)
 
 	// By default we send job output to the second virtio console,
 	// reserving /dev/ttyS0 for boot messages (which we ignore)
 	// and /dev/hvc0 for possible use by systemd as a getty
 	// (which we also ignore).
-	tty := "/dev/tty0"
+	tty := "/dev/tty1"
 	if m.showBoot {
 		// If we are debugging a failing boot, mix job output into
 		// the normal console messages instead, so we can see both.
@@ -512,21 +520,26 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 	//}
 	memory := fmt.Sprintf("%d", m.memory)
 	//numcpus := fmt.Sprintf("%d", m.numcpus)
-	qemuargs := []string{"linux.uml",
+	qemuargs := []string{"linux",
 		//"-cpu", "host",
 		//"-smp", numcpus,
 		"mem=" + memory + "M",
 		//"-enable-kvm",
 		//"-kernel", "/boot/vmlinuz-" + kernelRelease,
 		"initrd=" + InitrdPath,
-		"systemd.debug-shell=1",
 		"panic=-1",
+		"nosplash",
 		"systemd.unit=fakemachine.service",
 		"console=tty0",
-		"eth0=slirp,,slirp",
-		}
+		//"con0=fd:0,fd:1", // tty0 to stdin/stdout when showing boot
+		"con1=fd:0,fd:1", // tty0 to stdin/stdout
+		"con0=null",      // no other consoles, needs to be null
+		"con=none",       // no other consoles
+		//"vec0:transport=libslirp,dst=/tmp/libslirp",
+		"vec0:transport=bess,dst=/tmp/libslirp",
+	}
 	//kernelargs := []string{"console=ttyS0", "panic=-1",
-		//"systemd.unit=fakemachine.service"}
+	//"systemd.unit=fakemachine.service"}
 
 	if m.showBoot {
 		// Create a character device representing our stdio
@@ -539,31 +552,33 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 		//	"-serial", "chardev:for-ttyS0")
 	} else {
 		//qemuargs = append(qemuargs,
-			// Create the bus for virtio consoles
+		// Create the bus for virtio consoles
 		//	"-device", "virtio-serial",
-			// Create /dev/ttyS0 to be the VM console, but
-			// ignore anything written to it, so that it
-			// doesn't corrupt our terminal
+		// Create /dev/ttyS0 to be the VM console, but
+		// ignore anything written to it, so that it
+		// doesn't corrupt our terminal
 		//	"-chardev", "null,id=for-ttyS0",
 		//	"-serial", "chardev:for-ttyS0",
 		//	// Connect the fakemachine script to our stdio
-			// file descriptors
+		// file descriptors
 		//	"-chardev", "stdio,id=for-hvc0,signal=off",
 		//	"-device", "virtconsole,chardev=for-hvc0")
 	}
 
 	//for _, point := range m.mounts {
-		//qemuargs = append(qemuargs, "-virtfs",
-		//	fmt.Sprintf("local,mount_tag=%s,path=%s,security_model=none",
-		//		point.label, point.hostDirectory))
+	//qemuargs = append(qemuargs, "-virtfs",
+	//	fmt.Sprintf("local,mount_tag=%s,path=%s,security_model=none",
+	//		point.label, point.hostDirectory))
 	//}
 
 	for i, img := range m.images {
-		qemuargs = append(qemuargs, "-drive",
-			fmt.Sprintf("file=%s,if=none,format=raw,cache=unsafe,id=drive-virtio-disk%d", img.path, i))
-		qemuargs = append(qemuargs, "-device",
-			fmt.Sprintf("virtio-blk-pci,drive=drive-virtio-disk%d,id=virtio-disk%d,serial=%s",
-				i, i, img.label))
+		qemuargs = append(qemuargs,
+			fmt.Sprintf("ubd%d=%s", i, img.path))
+		//qemuargs = append(qemuargs, "-drive",
+		//	fmt.Sprintf("file=%s,if=none,format=raw,cache=unsafe,id=drive-virtio-disk%d", img.path, i))
+		//qemuargs = append(qemuargs, "-device",
+		//	fmt.Sprintf("virtio-blk-pci,drive=drive-virtio-disk%d,id=virtio-disk%d,serial=%s",
+		//		i, i, img.label))
 	}
 
 	//qemuargs = append(qemuargs, "-append", strings.Join(kernelargs, " "))
@@ -572,7 +587,7 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	}
 
-	if p, err := os.StartProcess("/usr/bin/linux.uml", qemuargs, &pa); err != nil {
+	if p, err := os.StartProcess("/usr/bin/linux", qemuargs, &pa); err != nil {
 		return -1, err
 	} else {
 		p.Wait()
