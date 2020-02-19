@@ -531,10 +531,6 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 		"nosplash",
 		"systemd.unit=fakemachine.service",
 		"console=tty0",
-		//"con0=fd:0,fd:1", // tty0 to stdin/stdout when showing boot
-		"con1=fd:0,fd:1", // tty0 to stdin/stdout
-		"con0=null",      // no other consoles, needs to be null
-		"con=none",       // no other consoles
 		//"vec0:transport=libslirp,dst=/tmp/libslirp",
 		"vec0:transport=bess,dst=/tmp/libslirp",
 	}
@@ -550,6 +546,9 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 		//qemuargs = append(qemuargs,
 		//	"-chardev", "stdio,id=for-ttyS0,signal=off",
 		//	"-serial", "chardev:for-ttyS0")
+		qemuargs = append(qemuargs,
+			"con0=fd:0,fd:1", // tty0 to stdin/stdout when showing boot
+			"con=none")       // no other consoles
 	} else {
 		//qemuargs = append(qemuargs,
 		// Create the bus for virtio consoles
@@ -563,6 +562,10 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 		// file descriptors
 		//	"-chardev", "stdio,id=for-hvc0,signal=off",
 		//	"-device", "virtconsole,chardev=for-hvc0")
+		qemuargs = append(qemuargs,
+			"con1=fd:0,fd:1",
+			"con0=null",
+			"con=none")       // no other consoles
 	}
 
 	//for _, point := range m.mounts {
