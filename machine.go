@@ -89,8 +89,9 @@ func InMachine() (ret bool) {
 }
 
 func Supported() bool {
-	_, err := os.Stat("/dev/kvm")
-	return err == nil
+	// _, err := os.Stat("/dev/kvm")
+	// return err == nil
+	return true
 }
 
 const initScript = `#!/bin/busybox sh
