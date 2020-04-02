@@ -65,6 +65,7 @@ func NewMachine() (m *Machine) {
 		m.addStaticVolume("/bin", "bin")
 		m.addStaticVolume("/lib", "lib")
 	}
+	m.AddVolumeAt("/usr/lib/uml/modules", "/lib/modules")
 	// Mount for ssl certificates
 	if _, err := os.Stat("/etc/ssl"); err == nil {
 		m.AddVolume("/etc/ssl")
@@ -114,6 +115,7 @@ if ! busybox test -L /bin ; then
 	busybox mount none /lib -o /lib -t hostfs
 	#busybox mount -v -t 9p -o trans=virtio,version=9p2000.L,cache=loose,msize=262144 lib /lib
 fi
+busybox mount none /lib/modules -o /usr/lib/uml/modules -t hostfs
 #exec busybox ash
 exec /lib/systemd/systemd
 `
