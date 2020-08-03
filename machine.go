@@ -607,7 +607,7 @@ func (m *Machine) startup(command string, extracontent [][2]string) (int, error)
 
 	for _, point := range m.mounts {
 		qemuargs = append(qemuargs, "-virtfs",
-			fmt.Sprintf("local,mount_tag=%s,path=%s,security_model=none",
+			fmt.Sprintf("local,mount_tag=%s,path=%s,security_model=none,multidevs=remap",
 				point.label, point.hostDirectory))
 	}
 
